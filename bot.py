@@ -238,10 +238,11 @@ def generate_trip_content(trip_id):
 
     body = "<b>🛒 РАЦИОН, ЗАТРАТЫ И КБЖУ</b>\n\n"
     
-    body += "<b>📊 Расходы по магазинам:</b>\n"
-    for shop, total_sum in shop_totals.items():
-        body += f"• {html.escape(shop)}: {total_sum} руб.\n"
-    body += "\n"
+    if shop_totals:
+        body += "<b>📊 Расходы по магазинам:</b>\n"
+        for shop, total_sum in shop_totals.items():
+            body += f"• {html.escape(shop)}: {total_sum} руб.\n"
+        body += "\n"
 
     for shop, shop_items in shops_dict.items():
         body += f"<b>🏬 {html.escape(shop)}:</b>\n"
@@ -269,8 +270,6 @@ def generate_trip_content(trip_id):
         if grand_total > trip['budget']:
             body += "\n⚠️ <b>Внимание: бюджет превышен!</b>"
 
-    text = f"<blockquote>{body}</blockquote>"
-
     markup = types.InlineKeyboardMarkup(row_width=1)
     for item in items:
         status_symbol = "🛒"
@@ -285,19 +284,22 @@ def generate_trip_content(trip_id):
     markup.add(types.InlineKeyboardButton(text="📤 Экспортировать список для близких", callback_data=f"export_{trip_id}"))
     markup.add(types.InlineKeyboardButton(text="🏁 Завершить закупку (в архив)", callback_data=f"finish_{trip_id}"))
     
-    return text, markup
+    return body, markup
 
 def send_trip_message(chat_id, trip_id):
     text, markup = generate_trip_content(trip_id)
-    if len(text) > 4000:
-        parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
-        for idx, part in enumerate(parts):
-            if idx == len(parts) - 1:
-                bot.send_message(chat_id, part, reply_markup=markup, parse_mode="HTML")
-            else:
-                bot.send_message(chat_id, part, parse_mode="HTML")
-    else:
-        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
+    try:
+        if len(text) > 4000:
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for idx, part in enumerate(parts):
+                if idx == len(parts) - 1:
+                    bot.send_message(chat_id, part, reply_markup=markup, parse_mode="HTML")
+                else:
+                    bot.send_message(chat_id, part, parse_mode="HTML")
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup, parse_mode="HTML")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Ошибка отображения списка: {e}")
 
 @bot.message_handler(content_types=['photo'])
 def handle_receipt_photo(message):
@@ -362,7 +364,7 @@ def callback_handler(call):
             conn.execute("UPDATE trips SET status = 'completed' WHERE id = ?", (trip_id,))
             conn.commit()
             
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🎉 Закупка завершена и сохранена в историю!", parse_mode="HTML")
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🎉 Закупка завершена и сохранена в архив!", parse_mode="HTML")
         bot.answer_callback_query(call.id, "Успешно сохранено в архив!")
 
 def update_trip_message(message, trip_id):
