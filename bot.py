@@ -29,7 +29,7 @@ threading.Thread(target=run_health_server, daemon=True).start()
 # --------------------------
 
 TOKEN = os.getenv("BOT_TOKEN")
-GIGACHAT_CREDENTIALS = os.getenv("MDFhMDhjODctNzJlOS03ZTM1LTkyZDUtMzQ2NWEzNzg4MzAxOmY3YmQyODM4LWJlOTItNGYzOC1hOGZjLTM1YTU2ZjE2YTgzMg==")
+GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 bot = telebot.TeleBot(TOKEN)
 DB_FILE = "shopping.db"
 ITEMS_PER_PAGE = 7
@@ -224,7 +224,7 @@ def show_catalog(message, page=1):
     text, markup = generate_catalog_content(message.chat.id, page)
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="HTML") if markup else bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-# --- КОРЗИНА ---
+# --- КОРЗИНА И РАСЧЕТ БЮДЖЕТА ---
 def start_shopping(message):
     chat_id = message.chat.id
     with get_db() as conn:
@@ -240,27 +240,29 @@ def generate_trip_content(trip_id):
         items = conn.execute("SELECT * FROM trip_items WHERE trip_id = ? ORDER BY shop ASC, id DESC", (trip_id,)).fetchall()
 
     shop_totals = {}
-    grand_total, grand_calories, items_bought = 0, 0, 0
+    planned_total, spent_total, items_bought = 0, 0, 0
     
     for item in items:
         shop = item['shop']
         if shop not in shop_totals:
-            shop_totals[shop] = {'sum': 0, 'items': []}
+            shop_totals[shop] = {'items': []}
         
         shop_totals[shop]['items'].append(item)
+        # Считаем ВСЕ добавленные товары, чтобы понимать планируемый расход
+        planned_total += item['price']
+        
+        # Считаем только то, что уже куплено (отмечено галочкой)
         if item['status'] == 'bought':
-            grand_total += item['price']
-            grand_calories += item['calories']
-            shop_totals[shop]['sum'] += item['price']
+            spent_total += item['price']
             items_bought += 1
 
     body = f"🛒 <b>Корзина на сегодня</b> <i>({items_bought}/{len(items)})</i>\n\n"
     
     if not items:
-        body += "<i>Корзина пуста. Добавьте товары из каталога.</i>"
+        body += "<i>Корзина пуста. Добавьте товары из каталога.</i>\n\n"
     else:
         for shop, data in shop_totals.items():
-            body += f"🏪 <b>{html.escape(shop)}</b> <i>(Куплено на {data['sum']} р)</i>:\n<blockquote>"
+            body += f"🏪 <b>{html.escape(shop)}</b>:\n<blockquote>"
             for item in data['items']:
                 safe_name = html.escape(item['name'])
                 icon = "🟢" if item['status'] == 'bought' else "⚪️"
@@ -268,13 +270,15 @@ def generate_trip_content(trip_id):
                 body += f"{icon} {tag} — <b>{item['price']}р</b>\n"
             body += "</blockquote>\n"
     
-    body += f"💳 <b>Сумма чека:</b> {grand_total} руб.\n"
+    # НОВЫЙ ВЫВОД ИНФОРМАЦИИ ПО ДЕНЬГАМ
+    body += f"📝 <b>Общая сумма списка:</b> {planned_total} руб.\n"
+    body += f"💳 <b>Уже в тележке (куплено):</b> {spent_total} руб.\n"
     
     if trip['budget'] > 0:
-        if grand_total > trip['budget']:
-            body += f"⚠️ <b>Превышение бюджета:</b> +{grand_total - trip['budget']} руб."
+        if planned_total > trip['budget']:
+            body += f"⚠️ <b>Превышение:</b> ваш список больше бюджета на {planned_total - trip['budget']} руб.!"
         else:
-            body += f"💚 <b>Экономия:</b> {trip['budget'] - grand_total} руб. из {trip['budget']} руб."
+            body += f"💚 <b>Остаток средств:</b> {trip['budget'] - planned_total} руб. (из {trip['budget']} руб.)"
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     for item in items:
