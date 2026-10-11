@@ -8,6 +8,8 @@ import threading
 import math
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
+from gigachat import GigaChat
+from gigachat.models import ChatCompletionRequest, ChatMessage
 
 # --- Фоновый веб-сервер ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -27,6 +29,7 @@ threading.Thread(target=run_health_server, daemon=True).start()
 # --------------------------
 
 TOKEN = os.getenv("BOT_TOKEN")
+GIGACHAT_CREDENTIALS = os.getenv("MDFhMDhjODctNzJlOS03ZTM1LTkyZDUtMzQ2NWEzNzg4MzAxOmY3YmQyODM4LWJlOTItNGYzOC1hOGZjLTM1YTU2ZjE2YTgzMg==") # Токен авторизации GigaChat
 bot = telebot.TeleBot(TOKEN)
 DB_FILE = "shopping.db"
 ITEMS_PER_PAGE = 7
@@ -107,12 +110,11 @@ def send_welcome(message):
     text = (
         "<b>🧾 Умный бот списка покупок</b>\n\n"
         "<b>Добавление товаров:</b>\n"
-        "Пишите текстом (можно без скобок):\n"
-        "<code>Молоко Магнит 80 50ккал</code>\n"
-        "<code>Творог 120</code> (магазин и калории авто-пропустятся)\n\n"
+        "Пишите текстом: <code>Молоко Магнит 80</code>\n"
+        "Или <b>отправьте фото чека</b>, и нейросеть сама добавит позиции!\n\n"
         "<b>Расчет КБЖУ:</b>\n"
-        "Используйте команду: <code>/calc [М/Ж] [вес] [рост] [возраст]</code>\n"
-        "Пример: <code>/calc М 85 180 30</code>"
+        "Команда: <code>/calc [М/Ж] [вес] [рост] [возраст]</code>\n"
+        "Бюджет: <code>/budget 2000</code>"
     )
     bot.reply_to(message, text, parse_mode="HTML", reply_markup=get_main_menu())
 
@@ -135,9 +137,7 @@ def show_profile(message):
         f"💰 <b>Копилка (сэкономлено):</b> {user['savings']} руб.\n"
         f"🔥 <b>Суточная норма:</b> {user['daily_kcal'] if user['daily_kcal'] > 0 else 'Не задана'} ккал\n\n"
         "<i>Настроить бюджет на поход:</i> <code>/budget [сумма]</code>\n"
-        "<i>Рассчитать норму калорий:</i> <code>/calc [М/Ж] [вес] [рост] [возраст]</code>\n"
-        "<i>Задать цель вручную:</i> <code>/goal [ккал]</code>\n\n"
-        "💡 <i>Сэкономленные средства (разница между бюджетом и тратами) автоматически идут в Копилку при завершении похода.</i>"
+        "<i>Рассчитать норму калорий:</i> <code>/calc [М/Ж] [вес] [рост] [возраст]</code>"
     )
     bot.reply_to(message, text, parse_mode="HTML")
 
@@ -151,16 +151,12 @@ def calculate_calories(message):
         height = float(parts[3])
         age = int(parts[4])
         
-        if gender not in ['М', 'Ж']:
-            raise ValueError
-            
-        # Формула Миффлина-Сан Жеора (базовый метаболизм + легкая активность)
         if gender == 'М':
             bmr = (10 * weight) + (6.25 * height) - (5 * age) + 5
         else:
             bmr = (10 * weight) + (6.25 * height) - (5 * age) - 161
             
-        daily_kcal = int(bmr * 1.2) # Коэффициент минимальной активности
+        daily_kcal = int(bmr * 1.2)
         
         with get_db() as conn:
             conn.execute("UPDATE users SET daily_kcal = ? WHERE chat_id = ?", (daily_kcal, chat_id))
@@ -186,17 +182,16 @@ def generate_catalog_content(chat_id, page=1):
 
         total_items = conn.execute("SELECT count(*) as c FROM catalog WHERE chat_id = ?", (chat_id,)).fetchone()['c']
         total_pages = max(1, math.ceil(total_items / ITEMS_PER_PAGE))
-        page = max(1, min(page, total_pages)) # Защита от выхода за границы
+        page = max(1, min(page, total_pages))
         offset = (page - 1) * ITEMS_PER_PAGE
 
-        catalog_items = conn.execute("SELECT * FROM catalog WHERE chat_id = ? LIMIT ? OFFSET ?", (chat_id, ITEMS_PER_PAGE, offset)).fetchall()
+        catalog_items = conn.execute("SELECT * FROM catalog WHERE chat_id = ? ORDER BY id DESC LIMIT ? OFFSET ?", (chat_id, ITEMS_PER_PAGE, offset)).fetchall()
         trip_items = conn.execute("SELECT name, shop FROM trip_items WHERE trip_id = ?", (trip_id,)).fetchall()
         
     if not catalog_items:
-        return "Каталог пуст. Напишите товары в чат.", None
+        return "Каталог пуст. Напишите товары в чат или отправьте фото чека.", None
 
     trip_items_set = {(item['name'], item['shop']) for item in trip_items}
-
     text = f"<b>📋 КАТАЛОГ (Стр {page}/{total_pages})</b>\nДобавляйте (+) товары в корзину:"
     markup = types.InlineKeyboardMarkup(row_width=2)
     
@@ -206,7 +201,6 @@ def generate_catalog_content(chat_id, page=1):
         btn_text = f"{icon} {cat_item['name']} - {cat_item['price']}р"
         markup.add(types.InlineKeyboardButton(text=btn_text, callback_data=f"cat_{cat_item['id']}_{trip_id}_{page}"))
 
-    # Кнопки пагинации
     nav_buttons = []
     if page > 1:
         nav_buttons.append(types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"page_{page-1}"))
@@ -243,7 +237,6 @@ def generate_trip_content(trip_id):
     shop_totals = {}
     grand_total = 0
     grand_calories = 0
-    
     body = "<b>🛒 МОЯ КОРЗИНА НА СЕГОДНЯ</b>\n\n"
     
     for item in items:
@@ -360,13 +353,11 @@ def callback_handler(call):
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=msg, parse_mode="HTML")
         bot.answer_callback_query(call.id)
 
-# --- УМНЫЙ ПАРСИНГ ТЕКСТА ---
-@bot.message_handler(func=lambda message: True)
-def parse_smart_items(message):
-    chat_id = message.chat.id
-    lines = message.text.strip().split("\n")
-    added = 0
 
+# --- ЯДРО РАСПОЗНАВАНИЯ ТЕКСТА ---
+def process_items_text(chat_id, text):
+    lines = text.strip().split("\n")
+    added = 0
     with get_db() as conn:
         cursor = conn.cursor()
         for line in lines:
@@ -390,10 +381,14 @@ def parse_smart_items(message):
                 elif word_clean.capitalize() in ["Чижик", "Магнит", "Пятерочка", "Ашан", "Перекресток"]:
                     shop = word.capitalize()
                 else:
-                    if not re.match(r'^\d+$', word_clean): # Не добавляем числа в название, если это не бренд
+                    if not re.match(r'^\d+$', word_clean): # Игнорируем голые цифры в имени
                         name_parts.append(word)
+            
+            # Игнорируем строки-паразиты нейросети без цен
+            if price == 0: 
+                continue
 
-            name = " ".join(name_parts) if name_parts else "Неизвестно"
+            name = " ".join(name_parts) if name_parts else "Товар по чеку"
             
             cursor.execute(
                 "INSERT INTO catalog (chat_id, name, shop, price, calories) VALUES (?, ?, ?, ?, ?)",
@@ -401,9 +396,73 @@ def parse_smart_items(message):
             )
             added += 1
         conn.commit()
+    return added
 
+# --- РАСПОЗНАВАНИЕ ЧЕКА ПО ФОТО (GigaChat) ---
+@bot.message_handler(content_types=['photo'])
+def handle_receipt_photo(message):
+    chat_id = message.chat.id
+    if not GIGACHAT_CREDENTIALS:
+        bot.send_message(chat_id, "⚠️ Токен GigaChat не настроен. Добавьте переменную окружения GIGACHAT_CREDENTIALS.")
+        return
+
+    msg = bot.reply_to(message, "📷 Фото чека получено! Нейросеть начала расшифровку...")
+    photo_path = f"receipt_{chat_id}.jpg"
+    try:
+        # Скачиваем файл
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        with open(photo_path, 'wb') as new_file:
+            new_file.write(downloaded_file)
+            
+        bot.edit_message_text("🧠 Анализирую позиции в чеке (это займет пару секунд)...", chat_id=chat_id, message_id=msg.message_id)
+        
+        # Общаемся с GigaChat
+        with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False) as giga:
+            with open(photo_path, 'rb') as f:
+                uploaded = giga.upload_file(f, purpose="general")
+                
+            req = ChatCompletionRequest(
+                model="GigaChat-Max", 
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content="Распознай товары из чека. Напиши каждый товар с новой строки строго в формате: НазваниеТовара Цена. Без нумерации, без слов 'Итого', 'Скидка' и лишнего текста.",
+                        attachments=[uploaded.id]
+                    )
+                ]
+            )
+            response = giga.chat.create(req)
+            
+            # Получаем текст от нейросети
+            result_content = response.messages[0].content
+            result_text = result_content if isinstance(result_content, str) else str(result_content)
+            
+        safe_text = html.escape(result_text[:700]) + ("..." if len(result_text) > 700 else "")
+        bot.edit_message_text(f"✅ <b>Чек распознан:</b>\n\n<i>{safe_text}</i>\n\n⚙️ Сохраняю в базу...", chat_id=chat_id, message_id=msg.message_id, parse_mode="HTML")
+        
+        # Передаем текст в наш умный парсер
+        added = process_items_text(chat_id, result_text)
+        
+        bot.send_message(chat_id, f"🛒 Успешно извлечено и добавлено в Каталог: <b>{added} позиций</b>.\nНажмите <b>📋 Каталог</b> в меню, чтобы добавить их в текущую корзину на сегодня.", parse_mode="HTML")
+        
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка распознавания: {e}")
+    finally:
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+
+@bot.message_handler(func=lambda message: True)
+def parse_smart_items(message):
+    chat_id = message.chat.id
+    if message.text.startswith('/'): 
+        return
+        
+    added = process_items_text(chat_id, message.text)
     if added > 0:
         bot.reply_to(message, f"✅ Сохранено в базу: {added} шт.\nОткройте <b>📋 Каталог</b> для сборки корзины.", parse_mode="HTML")
+    else:
+        bot.reply_to(message, "Не удалось распознать товары с ценой.", parse_mode="HTML")
 
 @bot.message_handler(commands=['budget'])
 def set_budget(message):
@@ -415,6 +474,27 @@ def set_budget(message):
         bot.reply_to(message, f"🎯 Бюджет {val} руб. установлен.")
     except Exception:
         bot.reply_to(message, "Ошибка. Формат: /budget 2000")
+
+@bot.message_handler(commands=['history'])
+def show_history(message):
+    chat_id = message.chat.id
+    with get_db() as conn:
+        trips = conn.execute("SELECT * FROM trips WHERE chat_id = ? AND status = 'completed' ORDER BY id DESC LIMIT 5", (chat_id,)).fetchall()
+
+    if not trips:
+        bot.reply_to(message, "📭 История покупок пуста.")
+        return
+
+    text = "<b>📜 Архив прошлых покупок:</b>\n\n"
+    for trip in trips:
+        text += f"📅 <b>Закупка от {trip['date']}</b>\n"
+        items = get_db().execute("SELECT * FROM trip_items WHERE trip_id = ? AND status = 'bought'", (trip['id'],)).fetchall()
+        trip_total = sum(i['price'] for i in items)
+        for item in items:
+            text += f"  • {html.escape(item['name'])} ({html.escape(item['shop'])}) — {item['price']} руб.\n"
+        text += f"  💰 Итого: {trip_total} руб.\n\n"
+
+    bot.reply_to(message, text, parse_mode="HTML")
 
 if __name__ == "__main__":
     bot.infinity_polling()
