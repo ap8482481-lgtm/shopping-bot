@@ -116,7 +116,7 @@ def get_main_menu():
 def send_welcome(message):
     get_user(message.chat.id)
     text = (
-        "🍽 <b>Умный помощник @DishAndCheckBot</b>\n\n"
+        "🍽 <b>Умный помощник @my_check_buy_bot</b>\n\n"
         "<blockquote><b>Как добавлять товары:</b>\n"
         "📝 Текстом: <code>Молоко Магнит 80</code>\n"
         "📸 Чеком: Отправьте фото, нейросеть всё распознает.</blockquote>\n\n"
