@@ -174,7 +174,7 @@ def calculate_calories(message):
     except Exception:
         bot.reply_to(message, "⚠️ Ошибка формата. Пример: <code>/calc М 85 180 30</code>", parse_mode="HTML")
 
-# --- КАТАЛОГ ---
+# --- КАТАЛОГ С СОРТИРОВКОЙ ПО МАГАЗИНАМ ---
 def generate_catalog_content(chat_id, page=1):
     with get_db() as conn:
         trip = conn.execute("SELECT * FROM trips WHERE chat_id = ? AND status = 'active'", (chat_id,)).fetchone()
@@ -188,32 +188,33 @@ def generate_catalog_content(chat_id, page=1):
         else:
             trip_id = trip['id']
 
+        # Сортируем каталог по магазинам, а затем по новизне
         total_items = conn.execute("SELECT count(*) as c FROM catalog WHERE chat_id = ?", (chat_id,)).fetchone()['c']
         total_pages = max(1, math.ceil(total_items / ITEMS_PER_PAGE))
         page = max(1, min(page, total_pages))
         offset = (page - 1) * ITEMS_PER_PAGE
 
-        catalog_items = conn.execute("SELECT * FROM catalog WHERE chat_id = ? ORDER BY id DESC LIMIT ? OFFSET ?", (chat_id, ITEMS_PER_PAGE, offset)).fetchall()
+        catalog_items = conn.execute("SELECT * FROM catalog WHERE chat_id = ? ORDER BY shop ASC, id DESC LIMIT ? OFFSET ?", (chat_id, ITEMS_PER_PAGE, offset)).fetchall()
         trip_items = conn.execute("SELECT name, shop FROM trip_items WHERE trip_id = ?", (trip_id,)).fetchall()
         
     if not catalog_items:
         return "📭 Каталог пуст. Отправьте список товаров текстом или фото чека.", None
 
     trip_items_set = {(item['name'], item['shop']) for item in trip_items}
-    text = f"🛍 <b>Каталог товаров</b> <i>(Стр {page}/{total_pages})</i>\nНажмите на товар, чтобы добавить его в корзину:"
-    markup = types.InlineKeyboardMarkup(row_width=2)
+    text = f"🛍 <b>Каталог товаров (по магазинам)</b> <i>(Стр {page}/{total_pages})</i>\nНажмите на товар, чтобы добавить его в корзину:"
+    markup = types.InlineKeyboardMarkup(row_width=1)
     
     for cat_item in catalog_items:
         is_selected = (cat_item['name'], cat_item['shop']) in trip_items_set
         icon = "✅" if is_selected else "➕"
-        btn_text = f"{icon} {cat_item['name']} ({cat_item['shop']}) - {cat_item['price']}р"
+        btn_text = f"{icon} [{cat_item['shop']}] {cat_item['name']} — {cat_item['price']}р"
         markup.add(types.InlineKeyboardButton(text=btn_text, callback_data=f"cat_{cat_item['id']}_{trip_id}_{page}"))
 
     nav_buttons = []
     if page > 1:
-        nav_buttons.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"page_{page-1}"))
+        nav_buttons.append(types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"page_{page-1}"))
     if page < total_pages:
-        nav_buttons.append(types.InlineKeyboardButton(text="➡️", callback_data=f"page_{page+1}"))
+        nav_buttons.append(types.InlineKeyboardButton(text="Вперед ➡️", callback_data=f"page_{page+1}"))
     if nav_buttons:
         markup.row(*nav_buttons)
 
@@ -237,7 +238,8 @@ def start_shopping(message):
 def generate_trip_content(trip_id):
     with get_db() as conn:
         trip = conn.execute("SELECT * FROM trips WHERE id = ?", (trip_id,)).fetchone()
-        items = conn.execute("SELECT * FROM trip_items WHERE trip_id = ?", (trip_id,)).fetchall()
+        # Сортируем товары в корзине по магазинам
+        items = conn.execute("SELECT * FROM trip_items WHERE trip_id = ? ORDER BY shop ASC, id DESC", (trip_id,)).fetchall()
 
     shop_totals = {}
     grand_total, grand_calories, items_bought = 0, 0, 0
@@ -279,7 +281,7 @@ def generate_trip_content(trip_id):
     markup = types.InlineKeyboardMarkup(row_width=1)
     for item in items:
         status_symbol = "🟢" if item['status'] == 'bought' else "⚪️"
-        markup.add(types.InlineKeyboardButton(text=f"{status_symbol} {item['name']} — {item['price']}р", callback_data=f"toggle_{item['id']}_{trip_id}"))
+        markup.add(types.InlineKeyboardButton(text=f"{status_symbol} [{item['shop']}] {item['name']} — {item['price']}р", callback_data=f"toggle_{item['id']}_{trip_id}"))
 
     markup.add(types.InlineKeyboardButton(text="🏁 Сохранить чек и завершить", callback_data=f"finish_{trip_id}"))
     markup.add(types.InlineKeyboardButton(text="🗑 Очистить корзину", callback_data=f"clearcart_{trip_id}"))
@@ -401,16 +403,14 @@ def process_items_text(chat_id, text):
                     num = re.search(r'\d+', word_clean)
                     if num: calories = int(num.group())
                 elif word_clean.capitalize() in ["Чижик", "Магнит", "Пятерочка", "Ашан", "Перекресток"]:
-                    shop = word.capitalize()
+                    shop = word_clean.capitalize()
                 elif not re.match(r'^\d+$', word_clean):
-                    name_parts.append(word)
+                    name_parts.append(re.sub(r'[\(\)]+', '', word))
             
             if price == 0: continue
             
-            # Очищаем название от лишних скобок и буквы "г" на конце
             name = " ".join(name_parts)
-            name = re.sub(r'[\(\)]+', '', name) # Убираем лишние скобки
-            name = re.sub(r'\s+г$', '', name, flags=re.IGNORECASE) # Убираем "г" на конце
+            name = re.sub(r'\s+г$', '', name, flags=re.IGNORECASE)
             name = name.strip() if name.strip() else "Товар"
             
             cursor.execute("INSERT INTO catalog (chat_id, name, shop, price, calories) VALUES (?, ?, ?, ?, ?)", (chat_id, name, shop, price, calories))
