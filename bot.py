@@ -29,7 +29,7 @@ threading.Thread(target=run_health_server, daemon=True).start()
 # --------------------------
 
 TOKEN = os.getenv("BOT_TOKEN")
-GIGACHAT_CREDENTIALS = os.getenv("MDFhMDhjODctNzJlOS03ZTM1LTkyZDUtMzQ2NWEzNzg4MzAxOmY3YmQyODM4LWJlOTItNGYzOC1hOGZjLTM1YTU2ZjE2YTgzMg==")
+GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 bot = telebot.TeleBot(TOKEN)
 DB_FILE = "shopping.db"
 ITEMS_PER_PAGE = 7
@@ -207,7 +207,7 @@ def generate_catalog_content(chat_id, page=1):
     for cat_item in catalog_items:
         is_selected = (cat_item['name'], cat_item['shop']) in trip_items_set
         icon = "✅" if is_selected else "➕"
-        btn_text = f"{icon} {cat_item['name']} - {cat_item['price']}р"
+        btn_text = f"{icon} {cat_item['name']} ({cat_item['shop']}) - {cat_item['price']}р"
         markup.add(types.InlineKeyboardButton(text=btn_text, callback_data=f"cat_{cat_item['id']}_{trip_id}_{page}"))
 
     nav_buttons = []
