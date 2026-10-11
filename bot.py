@@ -462,11 +462,16 @@ def parse_smart_items(message):
 def set_budget(message):
     chat_id = message.chat.id
     parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ Укажите сумму бюджета. Пример: <code>/budget 2000</code>", parse_mode="HTML")
+        return
+        
+    clean_val = re.sub(r'\D', '', parts[1])
+    if not clean_val:
         bot.reply_to(message, "⚠️ Укажите сумму бюджета числом. Пример: <code>/budget 2000</code>", parse_mode="HTML")
         return
         
-    val = int(parts[1])
+    val = int(clean_val)
     with get_db() as conn:
         trip = conn.execute("SELECT id FROM trips WHERE chat_id = ? AND status = 'active'", (chat_id,)).fetchone()
         
@@ -482,7 +487,7 @@ def set_budget(message):
             conn.execute("UPDATE trips SET budget = ? WHERE chat_id = ? AND status = 'active'", (val, chat_id))
             conn.commit()
             
-    bot.reply_to(message, f"💳 <b>Бюджет установлен:</b> {val} руб.", parse_mode="HTML")
+    bot.reply_to(message, f"💳 <b>Бюджет на текущий поход установлен:</b> {val} руб.", parse_mode="HTML")
 
 @bot.message_handler(commands=['history'])
 def show_history(message):
