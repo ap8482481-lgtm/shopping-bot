@@ -256,14 +256,17 @@ def generate_trip_content(trip_id):
 
     body = f"🛒 <b>Корзина на сегодня</b> <i>({items_bought}/{len(items)})</i>\n\n"
     
-    for shop, data in shop_totals.items():
-        body += f"🏪 <b>{html.escape(shop)}</b> <i>(Куплено на {data['sum']} р)</i>:\n<blockquote>"
-        for item in data['items']:
-            safe_name = html.escape(item['name'])
-            icon = "🟢" if item['status'] == 'bought' else "⚪️"
-            tag = f"<s>{safe_name}</s>" if item['status'] == 'bought' else safe_name
-            body += f"{icon} {tag} — <b>{item['price']}р</b>\n"
-        body += "</blockquote>\n"
+    if not items:
+        body += "<i>Корзина пуста. Добавьте товары из каталога.</i>"
+    else:
+        for shop, data in shop_totals.items():
+            body += f"🏪 <b>{html.escape(shop)}</b> <i>(Куплено на {data['sum']} р)</i>:\n<blockquote>"
+            for item in data['items']:
+                safe_name = html.escape(item['name'])
+                icon = "🟢" if item['status'] == 'bought' else "⚪️"
+                tag = f"<s>{safe_name}</s>" if item['status'] == 'bought' else safe_name
+                body += f"{icon} {tag} — <b>{item['price']}р</b>\n"
+            body += "</blockquote>\n"
     
     body += f"💳 <b>Сумма чека:</b> {grand_total} руб.\n"
     
@@ -279,6 +282,7 @@ def generate_trip_content(trip_id):
         markup.add(types.InlineKeyboardButton(text=f"{status_symbol} {item['name']} — {item['price']}р", callback_data=f"toggle_{item['id']}_{trip_id}"))
 
     markup.add(types.InlineKeyboardButton(text="🏁 Сохранить чек и завершить", callback_data=f"finish_{trip_id}"))
+    markup.add(types.InlineKeyboardButton(text="🗑 Очистить корзину", callback_data=f"clearcart_{trip_id}"))
     return body, markup
 
 def send_trip_message(chat_id, trip_id):
@@ -327,6 +331,15 @@ def callback_handler(call):
         text, markup = generate_trip_content(int(trip_id))
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="HTML")
         bot.answer_callback_query(call.id)
+
+    elif data.startswith("clearcart_"):
+        _, trip_id = data.split("_")
+        with get_db() as conn:
+            conn.execute("DELETE FROM trip_items WHERE trip_id = ?", (int(trip_id),))
+            conn.commit()
+        text, markup = generate_trip_content(int(trip_id))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="HTML")
+        bot.answer_callback_query(call.id, "Корзина очищена!")
 
     elif data.startswith("finish_"):
         _, trip_id = data.split("_")
@@ -393,7 +406,12 @@ def process_items_text(chat_id, text):
                     name_parts.append(word)
             
             if price == 0: continue
-            name = " ".join(name_parts) if name_parts else "Товар"
+            
+            # Очищаем название от лишних скобок и буквы "г" на конце
+            name = " ".join(name_parts)
+            name = re.sub(r'[\(\)]+', '', name) # Убираем лишние скобки
+            name = re.sub(r'\s+г$', '', name, flags=re.IGNORECASE) # Убираем "г" на конце
+            name = name.strip() if name.strip() else "Товар"
             
             cursor.execute("INSERT INTO catalog (chat_id, name, shop, price, calories) VALUES (?, ?, ?, ?, ?)", (chat_id, name, shop, price, calories))
             added += 1
@@ -416,7 +434,6 @@ def handle_receipt_photo(message):
             
         bot.edit_message_text("🧠 GigaChat анализирует позиции...", chat_id=chat_id, message_id=msg.message_id)
         
-        # Увеличен таймаут до 30 секунд для предотвращения ошибок соединения
         with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False, timeout=30.0) as giga:
             with open(photo_path, 'rb') as f:
                 uploaded = giga.upload_file(f, purpose="general")
