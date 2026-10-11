@@ -29,7 +29,7 @@ threading.Thread(target=run_health_server, daemon=True).start()
 # --------------------------
 
 TOKEN = os.getenv("BOT_TOKEN")
-GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
+GIGACHAT_CREDENTIALS = os.getenv("MDFhMDhjODctNzJlOS03ZTM1LTkyZDUtMzQ2NWEzNzg4MzAxOmY3YmQyODM4LWJlOTItNGYzOC1hOGZjLTM1YTU2ZjE2YTgzMg==")
 bot = telebot.TeleBot(TOKEN)
 DB_FILE = "shopping.db"
 ITEMS_PER_PAGE = 7
@@ -50,7 +50,6 @@ def init_db():
                 daily_kcal INTEGER DEFAULT 0
             )
         ''')
-        # Добавляем новые колонки, если таблица уже существует (для обратной совместимости)
         try:
             conn.execute("ALTER TABLE users ADD COLUMN deposit INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE users ADD COLUMN deferred INTEGER DEFAULT 0")
@@ -417,7 +416,8 @@ def handle_receipt_photo(message):
             
         bot.edit_message_text("🧠 GigaChat анализирует позиции...", chat_id=chat_id, message_id=msg.message_id)
         
-        with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False) as giga:
+        # Увеличен таймаут до 30 секунд для предотвращения ошибок соединения
+        with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False, timeout=30.0) as giga:
             with open(photo_path, 'rb') as f:
                 uploaded = giga.upload_file(f, purpose="general")
             req = ChatCompletionRequest(
