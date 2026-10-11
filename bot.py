@@ -188,7 +188,6 @@ def generate_catalog_content(chat_id, page=1):
         else:
             trip_id = trip['id']
 
-        # Сортируем каталог по магазинам, а затем по новизне
         total_items = conn.execute("SELECT count(*) as c FROM catalog WHERE chat_id = ?", (chat_id,)).fetchone()['c']
         total_pages = max(1, math.ceil(total_items / ITEMS_PER_PAGE))
         page = max(1, min(page, total_pages))
@@ -238,7 +237,6 @@ def start_shopping(message):
 def generate_trip_content(trip_id):
     with get_db() as conn:
         trip = conn.execute("SELECT * FROM trips WHERE id = ?", (trip_id,)).fetchone()
-        # Сортируем товары в корзине по магазинам
         items = conn.execute("SELECT * FROM trip_items WHERE trip_id = ? ORDER BY shop ASC, id DESC", (trip_id,)).fetchall()
 
     shop_totals = {}
@@ -462,14 +460,29 @@ def parse_smart_items(message):
 
 @bot.message_handler(commands=['budget'])
 def set_budget(message):
-    try:
-        val = int(message.text.split()[1])
-        with get_db() as conn:
-            conn.execute("UPDATE trips SET budget = ? WHERE chat_id = ? AND status = 'active'", (val, message.chat.id))
+    chat_id = message.chat.id
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        bot.reply_to(message, "⚠️ Укажите сумму бюджета числом. Пример: <code>/budget 2000</code>", parse_mode="HTML")
+        return
+        
+    val = int(parts[1])
+    with get_db() as conn:
+        trip = conn.execute("SELECT id FROM trips WHERE chat_id = ? AND status = 'active'", (chat_id,)).fetchone()
+        
+        if not trip:
+            user = get_user(chat_id)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO trips (chat_id, date, status, budget, calorie_goal) VALUES (?, ?, 'active', ?, ?)", 
+                (chat_id, datetime.now().strftime("%d.%m.%Y %H:%M"), val, user['daily_kcal'])
+            )
             conn.commit()
-        bot.reply_to(message, f"💳 <b>Бюджет установлен:</b> {val} руб.", parse_mode="HTML")
-    except Exception:
-        bot.reply_to(message, "⚠️ Формат: /budget 2000")
+        else:
+            conn.execute("UPDATE trips SET budget = ? WHERE chat_id = ? AND status = 'active'", (val, chat_id))
+            conn.commit()
+            
+    bot.reply_to(message, f"💳 <b>Бюджет установлен:</b> {val} руб.", parse_mode="HTML")
 
 @bot.message_handler(commands=['history'])
 def show_history(message):
