@@ -224,7 +224,7 @@ def show_catalog(message, page=1):
     text, markup = generate_catalog_content(message.chat.id, page)
     bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="HTML") if markup else bot.send_message(message.chat.id, text, parse_mode="HTML")
 
-# --- КОРЗИНА И РАСЧЕТ БЮДЖЕТА ---
+# --- КОРЗИНА И ОФФЛАЙН РЕЖИМ ---
 def start_shopping(message):
     chat_id = message.chat.id
     with get_db() as conn:
@@ -248,10 +248,8 @@ def generate_trip_content(trip_id):
             shop_totals[shop] = {'items': []}
         
         shop_totals[shop]['items'].append(item)
-        # Считаем ВСЕ добавленные товары, чтобы понимать планируемый расход
         planned_total += item['price']
         
-        # Считаем только то, что уже куплено (отмечено галочкой)
         if item['status'] == 'bought':
             spent_total += item['price']
             items_bought += 1
@@ -270,7 +268,6 @@ def generate_trip_content(trip_id):
                 body += f"{icon} {tag} — <b>{item['price']}р</b>\n"
             body += "</blockquote>\n"
     
-    # НОВЫЙ ВЫВОД ИНФОРМАЦИИ ПО ДЕНЬГАМ
     body += f"📝 <b>Общая сумма списка:</b> {planned_total} руб.\n"
     body += f"💳 <b>Уже в тележке (куплено):</b> {spent_total} руб.\n"
     
@@ -281,10 +278,15 @@ def generate_trip_content(trip_id):
             body += f"💚 <b>Остаток средств:</b> {trip['budget'] - planned_total} руб. (из {trip['budget']} руб.)"
 
     markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    # Кнопки каждого товара
     for item in items:
         status_symbol = "🟢" if item['status'] == 'bought' else "⚪️"
         markup.add(types.InlineKeyboardButton(text=f"{status_symbol} [{item['shop']}] {item['name']} — {item['price']}р", callback_data=f"toggle_{item['id']}_{trip_id}"))
 
+    # Новые системные кнопки для оффлайна
+    markup.add(types.InlineKeyboardButton(text="📝 Экспорт для оффлайна (Заметки)", callback_data=f"export_{trip_id}"))
+    markup.add(types.InlineKeyboardButton(text="✅ Отметить всё как купленное", callback_data=f"checkall_{trip_id}"))
     markup.add(types.InlineKeyboardButton(text="🏁 Сохранить чек и завершить", callback_data=f"finish_{trip_id}"))
     markup.add(types.InlineKeyboardButton(text="🗑 Очистить корзину", callback_data=f"clearcart_{trip_id}"))
     return body, markup
@@ -335,6 +337,47 @@ def callback_handler(call):
         text, markup = generate_trip_content(int(trip_id))
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="HTML")
         bot.answer_callback_query(call.id)
+        
+    # --- НОВЫЙ БЛОК: ОТМЕТИТЬ ВСЁ И ЭКСПОРТ ---
+    elif data.startswith("checkall_"):
+        _, trip_id = data.split("_")
+        with get_db() as conn:
+            conn.execute("UPDATE trip_items SET status = 'bought' WHERE trip_id = ?", (int(trip_id),))
+            conn.commit()
+        text, markup = generate_trip_content(int(trip_id))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="HTML")
+        bot.answer_callback_query(call.id, "✅ Все товары отмечены как купленные!")
+
+    elif data.startswith("export_"):
+        _, trip_id = data.split("_")
+        with get_db() as conn:
+            items = conn.execute("SELECT * FROM trip_items WHERE trip_id = ? ORDER BY shop ASC, id DESC", (int(trip_id),)).fetchall()
+            
+        if not items:
+            bot.answer_callback_query(call.id, "Корзина пуста!")
+            return
+            
+        shop_dict = {}
+        for item in items:
+            shop = item['shop']
+            if shop not in shop_dict:
+                shop_dict[shop] = []
+            shop_dict[shop].append(item)
+            
+        raw_list = ""
+        for shop, shop_items in shop_dict.items():
+            raw_list += f"{shop}:\n"
+            for item in shop_items:
+                raw_list += f"- [ ] {item['name']} — {item['price']}р\n"
+            raw_list += "\n"
+            
+        export_text = "🛒 <b>Список для оффлайн-заметок</b>\n"
+        export_text += "Нажмите на блок с текстом ниже (он скопируется в 1 касание) и вставьте его в свои Apple Notes, Google Keep или Samsung Notes:\n\n"
+        export_text += f"<code>{html.escape(raw_list.strip())}</code>\n\n"
+        export_text += "💡 <i>Когда выйдете из магазина (и появится интернет), нажмите в корзине «✅ Отметить всё как купленное»!</i>"
+        
+        bot.send_message(chat_id, export_text, parse_mode="HTML")
+        bot.answer_callback_query(call.id, "Готово! Сообщение отправлено.")
 
     elif data.startswith("clearcart_"):
         _, trip_id = data.split("_")
